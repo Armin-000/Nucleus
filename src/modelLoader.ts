@@ -3,9 +3,10 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 type ColorOption = "beige" | "black" | "brown";
-type BatteryType = "long" | "short";
+type BatteryType = "long" | "short" | "disposable";
 
-const loader = new GLTFLoader();
+export const loadingManager = new THREE.LoadingManager();
+const loader = new GLTFLoader(loadingManager);
 
 export const originalMaterials = new WeakMap<
   THREE.Mesh,
@@ -84,7 +85,7 @@ export function createHighlightMaterial(
   const highlighted = new THREE.MeshStandardMaterial({
     color: 0x4da6ff,
     emissive: 0x123d6b,
-    metalness: 0.35,
+    metalness: 0.4,
     roughness: 0.45,
   });
 
@@ -96,6 +97,26 @@ export function createHighlightMaterial(
   }
 
   return highlighted;
+}
+
+export function createHoverMaterial(
+  sourceMaterial?: THREE.Material
+): THREE.MeshStandardMaterial {
+  const hovered = new THREE.MeshStandardMaterial({
+    color: 0x8fd3ff,
+    emissive: 0x1b4f85,
+    metalness: 0.25,
+    roughness: 0.6,
+  });
+
+  if (sourceMaterial && "map" in sourceMaterial) {
+    const maybeMap = (sourceMaterial as THREE.MeshStandardMaterial).map;
+    if (maybeMap) {
+      hovered.map = maybeMap;
+    }
+  }
+
+  return hovered;
 }
 
 export function restoreObjectMaterials(object: THREE.Object3D): void {
@@ -124,6 +145,23 @@ export function applyHighlight(object: THREE.Object3D): void {
       : mesh.material;
 
     mesh.material = createHighlightMaterial(sourceMaterial);
+  });
+}
+
+export function applyHoverHighlight(object: THREE.Object3D): void {
+  object.traverse((child: THREE.Object3D) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+
+    if (!originalMaterials.has(mesh)) {
+      originalMaterials.set(mesh, mesh.material);
+    }
+
+    const sourceMaterial = Array.isArray(mesh.material)
+      ? mesh.material[0]
+      : mesh.material;
+
+    mesh.material = createHoverMaterial(sourceMaterial);
   });
 }
 
