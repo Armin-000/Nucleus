@@ -22,6 +22,8 @@ import {
   showPanel,
 } from "./ui";
 import { renderTree, type TreeNode } from "./tree";
+import { ExplodeController } from "./explode";
+import { explodeRules } from "./explodeConfig";
 
 type ColorOption = "beige" | "black" | "brown";
 type BatteryType = "long" | "short" | "disposable";
@@ -45,6 +47,8 @@ const sidebarWrapper = document.getElementById("sidebarWrapper") as HTMLDivEleme
 const closeSidebarBtn = document.getElementById("closeSidebar") as HTMLButtonElement | null;
 const helpBtn = document.getElementById("helpBtn") as HTMLButtonElement | null;
 const resetBtn = document.getElementById("resetBtn") as HTMLButtonElement | null;
+const explodeBtn = document.getElementById("explodeBtn") as HTMLButtonElement | null;
+const themeToggleBtn = document.getElementById("themeToggleBtn") as HTMLButtonElement | null;
 const treeContainer = document.getElementById("tree") as HTMLDivElement | null;
 
 const itemBarButtons = Array.from(
@@ -76,6 +80,8 @@ if (
   !closeSidebarBtn ||
   !helpBtn ||
   !resetBtn ||
+  !explodeBtn ||
+  !themeToggleBtn ||
   !treeContainer ||
   !panelBody ||
   !panelComponents ||
@@ -101,6 +107,8 @@ const sidebarWrapperEl = sidebarWrapper;
 const closeSidebarButton = closeSidebarBtn;
 const helpButton = helpBtn;
 const resetButton = resetBtn;
+const explodeButton = explodeBtn;
+const themeToggleButton = themeToggleBtn;
 const treeRoot = treeContainer;
 const panelBodyEl = panelBody;
 const panelComponentsEl = panelComponents;
@@ -122,7 +130,7 @@ const loadingTextEl = loadingElement.querySelector(".loading-text") as HTMLDivEl
 
 const hierarchyData: TreeNode[] = [
   {
-    label: "Main Body",
+    label: "Main body",
     objectNames: ["Main Body", "Body", "Nucleus Body"],
     defaultExpanded: true,
     children: [
@@ -132,7 +140,7 @@ const hierarchyData: TreeNode[] = [
         defaultExpanded: true,
         children: [
           {
-            label: "Battery Module",
+            label: "Battery module",
             objectNames: ["Battery Module", "Battery"],
           },
         ],
@@ -142,11 +150,11 @@ const hierarchyData: TreeNode[] = [
         objectNames: ["Mechanism"],
         defaultExpanded: true,
         children: [
-          { label: "Control Button", objectNames: ["Control Button", "Button"] },
-          { label: "Indicator Light", objectNames: ["Indicator Light", "Light", "Indicator"] },
+          { label: "Control button", objectNames: ["Control Button", "Button"] },
+          { label: "Indicator light", objectNames: ["Indicator Light", "Light", "Indicator"] },
           { label: "Microphone 1", objectNames: ["Microphone 1", "Microphone1", "Mic 1"] },
           { label: "Microphone 2", objectNames: ["Microphone 2", "Microphone2", "Mic 2"] },
-          { label: "Microphone Cover", objectNames: ["Microphone Cover", "Mic Cover"] },
+          { label: "Microphone cover", objectNames: ["Microphone Cover", "Mic Cover"] },
         ],
       },
       { label: "Earhook", objectNames: ["Earhook", "Ear Hook"] },
@@ -174,7 +182,11 @@ const {
   camera,
   renderer,
   controls,
+  toggleTheme,
+  getTheme,
 } = viewerContext;
+
+const explodeController = new ExplodeController(explodeRules);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -197,6 +209,41 @@ const LONG_PRESS_DURATION = 550;
 const DOUBLE_TAP_DELAY = 300;
 const TOUCH_MOVE_TOLERANCE = 12;
 
+const loadingMessages = [
+  "Initializing environment",
+  "Loading 3D assets",
+  "Applying materials",
+  "Finalizing scene",
+];
+
+let loadingInterval: number | null = null;
+let loadingMessageIndex = 0;
+let minimumPreloadPassed = false;
+let assetsFullyLoaded = false;
+
+function getExplodeRoots(): THREE.Object3D[] {
+  return [currentBody, currentBattery].filter(Boolean) as THREE.Object3D[];
+}
+
+function syncExplodeButtonState(): void {
+  explodeButton.classList.toggle("active", explodeController.isExploded());
+}
+
+function syncThemeButtonState(): void {
+  const isDark = getTheme() === "dark";
+  themeToggleButton.classList.toggle("active", isDark);
+  themeToggleButton.title = isDark ? "Switch to light mode" : "Switch to dark mode";
+}
+
+function syncColorDropdownStyle(): void {
+  const colorDropdown = document.getElementById("colorDropdown") as HTMLDivElement | null;
+  if (!colorDropdown) return;
+
+  const selectedColor = colorInput.value as ColorOption;
+  colorDropdown.classList.remove("beige", "black", "brown");
+  colorDropdown.classList.add(selectedColor);
+}
+
 function setLoading(isLoading: boolean): void {
   loadingElement.classList.toggle("show", isLoading);
   appElement.classList.toggle("app-hidden", isLoading);
@@ -206,6 +253,37 @@ function setLoadingText(text: string): void {
   if (loadingTextEl) {
     loadingTextEl.textContent = text;
   }
+}
+
+function startLoadingMessages(): void {
+  const loadingMessageEl = document.getElementById("loadingMessage") as HTMLSpanElement | null;
+  if (!loadingMessageEl) return;
+
+  loadingMessageIndex = 0;
+  loadingMessageEl.textContent = loadingMessages[loadingMessageIndex];
+
+  if (loadingInterval !== null) {
+    window.clearInterval(loadingInterval);
+  }
+
+  loadingInterval = window.setInterval(() => {
+    loadingMessageIndex = (loadingMessageIndex + 1) % loadingMessages.length;
+    loadingMessageEl.textContent = loadingMessages[loadingMessageIndex];
+  }, 750);
+}
+
+function stopLoadingMessages(): void {
+  if (loadingInterval !== null) {
+    window.clearInterval(loadingInterval);
+    loadingInterval = null;
+  }
+}
+
+function tryFinishLoading(): void {
+  if (!minimumPreloadPassed || !assetsFullyLoaded) return;
+
+  stopLoadingMessages();
+  setLoading(false);
 }
 
 function closeAllCustomSelects(): void {
@@ -261,6 +339,9 @@ function clearSelection(): void {
 function clearCurrentModels(): void {
   clearHover();
   clearSelection();
+
+  explodeController.clearCache();
+  syncExplodeButtonState();
 
   if (currentBody) {
     modelRoot.remove(currentBody);
@@ -375,7 +456,7 @@ function findHitObject(event: MouseEvent): THREE.Object3D | null {
   updatePointerFromEvent(event);
   raycaster.setFromCamera(pointer, camera);
 
-  const roots = [currentBody, currentBattery].filter(Boolean) as THREE.Object3D[];
+  const roots = getExplodeRoots();
   const intersects = raycaster.intersectObjects(roots, true);
 
   if (intersects.length === 0) return null;
@@ -387,7 +468,7 @@ function findHitObjectFromTouch(touch: Touch): THREE.Object3D | null {
   updatePointerFromTouch(touch);
   raycaster.setFromCamera(pointer, camera);
 
-  const roots = [currentBody, currentBattery].filter(Boolean) as THREE.Object3D[];
+  const roots = getExplodeRoots();
   const intersects = raycaster.intersectObjects(roots, true);
 
   if (intersects.length === 0) return null;
@@ -599,6 +680,11 @@ function resetScene(): void {
     longPressTimer = null;
   }
 
+  const explodeRoots = getExplodeRoots();
+  explodeController.reset(explodeRoots);
+  explodeButton.classList.remove("active");
+  explodeButton.title = "Explode";
+
   if (currentBody) {
     currentBody.traverse((obj: THREE.Object3D) => {
       obj.visible = true;
@@ -622,25 +708,29 @@ function resetScene(): void {
 }
 
 loadingManager.onStart = () => {
+  assetsFullyLoaded = false;
+  minimumPreloadPassed = false;
+
   setLoading(true);
-  setLoadingText("Loading model...");
+  startLoadingMessages();
+
+  window.setTimeout(() => {
+    minimumPreloadPassed = true;
+    tryFinishLoading();
+  }, 3000);
 };
 
 loadingManager.onProgress = () => {
-  setLoadingText("Loading model...");
 };
 
 loadingManager.onLoad = () => {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      setLoadingText("Loading models...");
-      setLoading(false);
-    });
-  });
+  assetsFullyLoaded = true;
+  tryFinishLoading();
 };
 
 loadingManager.onError = (url) => {
   console.error("Greška pri učitavanju resursa:", url);
+  stopLoadingMessages();
 };
 
 async function updateModel(): Promise<void> {
@@ -678,6 +768,12 @@ async function updateModel(): Promise<void> {
     modelRoot.scale.set(1, 1, 1);
 
     centerModelGroup(modelRoot);
+
+    const explodeRoots = getExplodeRoots();
+    explodeController.refreshOriginalTransforms(explodeRoots);
+    explodeButton.classList.remove("active");
+    explodeButton.title = "Explode";
+
     fitCameraToObject(modelRoot);
     drawTree();
 
@@ -835,11 +931,34 @@ helpButton.addEventListener("click", () => {
   window.open("public/cochlear/nucleus7/documentation/Cochlear_manuals.pdf", "_blank");
 });
 
+themeToggleButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+
+  toggleTheme();
+  syncThemeButtonState();
+});
+
+explodeButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const explodeRoots = getExplodeRoots();
+  if (explodeRoots.length === 0) return;
+
+  const shouldActivate = !explodeButton.classList.contains("active");
+
+  explodeController.toggle(explodeRoots);
+  explodeButton.classList.toggle("active", shouldActivate);
+  explodeButton.title = shouldActivate ? "Reset explode" : "Explode";
+});
+
 resetButton.addEventListener("click", () => {
   resetScene();
 });
 
 setupCustomSelect("colorDropdown", "colorSelect", () => {
+  syncColorDropdownStyle();
   void updateModel();
 });
 
@@ -875,5 +994,15 @@ drawTree();
 void updateModel().then(() => {
   closeSidebar(sidebarWrapperEl);
 });
+
+syncThemeButtonState();
+syncColorDropdownStyle();
+
+/* optional debug */
+(
+  window as typeof window & {
+    explodeControllerDebug?: ExplodeController;
+  }
+).explodeControllerDebug = explodeController;
 
 start();
